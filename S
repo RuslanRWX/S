@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""S — interactive SSH launcher from Ansible inventory.
+Run from ~/repos/infra/ansible (or any dir with inventory/inventory.yml)."""
+
+import os
+import sys
+import shutil
+import subprocess
+import yaml
+
+DEFAULT_USER = "root"
+DEFAULT_PORT = 22
+
+
+def find_inventory():
+    path = os.getcwd()
+    while True:
+        candidate = os.path.join(path, "inventory", "inventory.yml")
+        if os.path.exists(candidate):
+            return candidate
+        parent = os.path.dirname(path)
+        if parent == path:
+            break
+        path = parent
+    default = os.path.expanduser("~/repos/infra/ansible/inventory/inventory.yml")
+    return default if os.path.exists(default) else None
+
+
+def load_hosts(path):
+    with open(path) as f:
+        inv = yaml.safe_load(f)
+
+    global_user = DEFAULT_USER
+    all_block = inv.get("all") or {}
+    all_vars = all_block.get("vars") or {}
+    global_user = all_vars.get("ansible_user", DEFAULT_USER)
+
+    seen = {}
+
+    def process_group(name, data, inherited_vars=None):
+        if not data:
+            return
+        gvars = dict(inherited_vars or {})
+        gvars.update(data.get("vars") or {})
+
+        for hostname, hvars in (data.get("hosts") or {}).items():
+            hvars = hvars or {}
+            ip   = hvars.get("ansible_host", hostname)
+            user = (hvars.get("ansible_ssh_user")
+                    or gvars.get("ansible_user")
+                    or global_user)
+            port = int(hvars.get("ansible_ssh_port")
+                       or gvars.get("ansible_ssh_port")
+                       or DEFAULT_PORT)
+            if hostname in seen:
+                if name not in seen[hostname]["groups"]:
+                    seen[hostname]["groups"].append(name)
+            else:
+                seen[hostname] = dict(
+                    hostname=hostname, ip=str(ip),
+                    user=str(user), port=port,
+                    groups=[name],
+                )
+
+        for child, cdata in (data.get("children") or {}).items():
+            process_group(child, cdata, gvars)
+
+    for grp, gdata in inv.items():
+        if grp != "all":
+            process_group(grp, gdata)
+
+    return list(seen.values())
+
+
+def fmt_host(h, w_host, num):
+    port_sfx = f":{h['port']}" if h["port"] != DEFAULT_PORT else ""
+    user_sfx = f"  [{h['user']}]" if h["user"] != DEFAULT_USER else ""
+    return f"  {h['hostname']:<{w_host}}  {h['ip']}{port_sfx}{user_sfx}  {num:>3}"
+
+
+def pick_fzf(hosts, query):
+    w_h = max(len(h["hostname"]) for h in hosts)
+    index = {}
+    lines = []
+    for i, h in enumerate(hosts, 1):
+        line = fmt_host(h, w_h, i)
+        index[line] = h
+        lines.append(line)
+    fzf = subprocess.run(
+        ["fzf", "--height=50%", "--reverse", "--query", query],
+        input="\n".join(lines), capture_output=True, text=True,
+    )
+    if fzf.returncode != 0:
+        return None
+    return index.get(fzf.stdout.strip())
+
+
+def pick_list(all_hosts, query):
+    from collections import OrderedDict
+    current_query = query
+    while True:
+        if current_query:
+            q = current_query.lower()
+            hosts = [h for h in all_hosts
+                     if q in h["hostname"].lower()
+                     or q in h["ip"]
+                     or any(q in g.lower() for g in h["groups"])]
+        else:
+            hosts = all_hosts
+
+        if not hosts:
+            print(f"  No hosts match '{current_query}'")
+            try:
+                current_query = input("Search: ").strip() or None
+            except (KeyboardInterrupt, EOFError):
+                return None
+            continue
+
+        if len(hosts) == 1:
+            return hosts[0]
+
+        w_h = max(len(h["hostname"]) for h in hosts)
+        groups = OrderedDict()
+        for h in hosts:
+            groups.setdefault(h["groups"][0], []).append(h)
+
+        numbered = []
+        for grp, members in groups.items():
+            print(f"\n[{grp}]")
+            for h in members:
+                i = len(numbered) + 1
+                numbered.append(h)
+                print(fmt_host(h, w_h, i))
+
+        print()
+        try:
+            raw = input("Select [number or name]: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            return None
+
+        if not raw:
+            return None
+
+        try:
+            idx = int(raw) - 1
+            if 0 <= idx < len(numbered):
+                return numbered[idx]
+            continue
+        except ValueError:
+            pass
+
+        starts = [h for h in numbered if h["hostname"].lower().startswith(raw.lower())]
+        if len(starts) == 1:
+            return starts[0]
+
+        print(f"  Not found by ^{raw} — searching by *{raw}*")
+        current_query = raw
+
+
+def ssh_exec(h):
+    cmd = ["ssh"]
+    if h["port"] != DEFAULT_PORT:
+        cmd += ["-p", str(h["port"])]
+    cmd.append(f"{h['user']}@{h['ip']}")
+    print(f"\n→ {' '.join(cmd)}\n")
+    os.execvp("ssh", cmd)
+
+
+def main():
+    query = " ".join(sys.argv[1:])
+
+    inv_path = find_inventory()
+    if not inv_path:
+        sys.exit("No inventory/inventory.yml found — run from the ansible repo dir")
+
+    hosts = load_hosts(inv_path)
+
+    if shutil.which("fzf"):
+        selected = pick_fzf(hosts, query)
+    else:
+        selected = pick_list(hosts, query)
+
+    if selected:
+        ssh_exec(selected)
+
+
+if __name__ == "__main__":
+    main()
