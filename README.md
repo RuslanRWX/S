@@ -38,6 +38,9 @@ S config --name <name> --inventory <path>
 # List all environments
 S list env
 
+# Switch the default environment
+S use <name>
+
 # Use a specific environment for one session
 S env <name>
 S env <name> <query>
@@ -59,6 +62,7 @@ S          # uses the staging inventory
 ```
 S [query]                                  SSH picker (default env)
 S env <name> [query]                       SSH picker for a named env
+S use <name>                               set the default environment
 S config --name <name> --inventory <path>  add/update an environment
 S list env                                 list configured environments
 S --help                                   show usage

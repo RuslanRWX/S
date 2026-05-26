@@ -55,6 +55,20 @@ def cmd_config(args):
     print(f"Saved: '{name}' → {inventory}")
 
 
+def cmd_use(args):
+    if not args:
+        sys.exit("Usage: S use <name>")
+    name = args[0]
+    cfg = load_config()
+    envs = cfg.get("environments", {})
+    if name not in envs:
+        available = ", ".join(envs) if envs else "(none)"
+        sys.exit(f"Unknown environment '{name}'. Available: {available}")
+    cfg["default"] = name
+    save_config(cfg)
+    print(f"Default environment set to '{name}'.")
+
+
 def cmd_list_env():
     cfg = load_config()
     envs = cfg.get("environments", {})
@@ -290,6 +304,7 @@ def print_usage():
         "Usage:\n"
         "  S [query]                               — SSH picker (default env)\n"
         "  S env <name> [query]                    — SSH picker for a named env\n"
+        "  S use <name>                            — set the default environment\n"
         "  S config --name <name> --inventory <path>  — add/update an environment\n"
         "  S list env                              — list configured environments\n"
         "\n"
@@ -311,6 +326,10 @@ def main():
 
     if args[0] == "list" and len(args) >= 2 and args[1] == "env":
         cmd_list_env()
+        return
+
+    if args[0] == "use":
+        cmd_use(args[1:])
         return
 
     if args[0] == "env":
