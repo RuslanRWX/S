@@ -166,6 +166,9 @@ def load_hosts(path):
 
     for grp, gdata in inv.items():
         if grp == "all":
+            gdata = gdata or {}
+            # Hosts defined directly under `all.hosts`
+            process_group("all", {"hosts": gdata.get("hosts")}, all_vars)
             for child, cdata in (gdata.get("children") or {}).items():
                 process_group(child, cdata, all_vars)
         else:
@@ -275,7 +278,7 @@ def pick_list(all_hosts, query):
 
 
 def ssh_exec(h):
-    cmd = ["ssh"]
+    cmd = ["ssh", "-A"]
     if h["port"] != DEFAULT_PORT:
         cmd += ["-p", str(h["port"])]
     cmd.append(f"{h['user']}@{h['ip']}")
